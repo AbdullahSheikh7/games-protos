@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Maze Runner</title>
+<style>
+:root{--bg:#f2efe6;--panel:#fffdf7;--ink:#1d2a2f;--wall:#1d2a2f;--floor:#fffdf7;--runner:#e0457b;--exit:#1f9d6b;--btn:#1d2a2f;--btnink:#fffdf7;--sec:#e3ddcc;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141b1f;--panel:#1c262b;--ink:#e9efe9;--wall:#8fb3c4;--floor:#1c262b;--runner:#ff6b9d;--exit:#3ddc97;--btn:#e9efe9;--btnink:#141b1f;--sec:#2a373d}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px 16px;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+h1{font-size:1.3rem;margin:4px 0 0;letter-spacing:.02em}
+#msg{min-height:1.4em;font-size:.95rem;text-align:center}
+#wrap{width:min(100%,520px)}
+canvas{display:block;width:100%;aspect-ratio:1;background:var(--floor);border:3px solid var(--wall);border-radius:6px}
+.row{display:flex;gap:10px;width:min(100%,520px)}
+button{font:inherit;font-weight:700;border:0;border-radius:12px;padding:14px;background:var(--btn);color:var(--btnink);cursor:pointer;flex:1}
+button.sec{background:var(--sec);color:var(--ink)}
+button:focus-visible{outline:3px solid var(--runner);outline-offset:2px}
+button:active{transform:scale(.97)}
+.turn{font-size:1.6rem;padding:26px 10px}
+.speed{display:flex;align-items:center;gap:12px;width:min(100%,520px);font-weight:700}
+.speed input{flex:1;accent-color:var(--runner);height:32px}
+.speed output{min-width:3.2em;text-align:right}
+</style>
+</head>
+<body>
+<h1>Maze Runner</h1>
+<div id="msg"></div>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div class="row">
+  <button class="sec" id="gen">Generate maze</button>
+  <button id="play">Play</button>
+</div>
+<label class="speed">Speed
+  <input type="range" id="spd" min="1.5" max="7" step="0.1" value="3.4">
+  <output id="spdv">3.4x</output>
+</label>
+<div class="row">
+  <button class="turn" id="L" aria-label="Turn left">⟲ Left</button>
+  <button class="turn" id="R" aria-label="Turn right">Right ⟳</button>
+</div>
+<script>
+const N=15; let SPEED=3.4;
+const DX=[0,1,0,-1], DY=[-1,0,1,0]; // N E S W
+const BIT=[1,2,4,8];
+const cv=document.getElementById('c'), ctx=cv.getContext('2d'), msg=document.getElementById('msg');
+let maze, state='idle', x,y,dir,startDir, angle=0, target=0, snapX=0, snapY=0, last=0;
+const Z=6; // cells visible across the screen while playing
+let viewZ=N+.8, viewX=N/2, viewY=N/2, zoomT0=0, raf=0;
+
+function gen(){
+  maze=Array.from({length:N},()=>Array(N).fill(0));
+  const seen=Array.from({length:N},()=>Array(N).fill(false));
+  const st=[[0,0]]; seen[0][0]=true;
+  while(st.length){
+    const [px,py]=st[st.length-1];
+    const nb=[0,1,2,3].filter(d=>{const nx=px+DX[d],ny=py+DY[d];return nx>=0&&ny>=0&&nx<N&&ny<N&&!seen[ny][nx]});
+    if(!nb.length){st.pop();continue}
+    const d=nb[Math.random()*nb.length|0], nx=px+DX[d], ny=py+DY[d];
+    maze[py][px]|=BIT[d]; maze[ny][nx]|=BIT[(d+2)%4]; seen[ny][nx]=true; st.push([nx,ny]);
+  }
+  // remove dead ends so the runner can never get trapped
+  const cnt=v=>[0,1,2,3].filter(d=>v&BIT[d]).length;
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){
+    if(cnt(maze[j][i])===1){
+      const opts=[0,1,2,3].filter(d=>{const nx=i+DX[d],ny=j+DY[d];return !(maze[j][i]&BIT[d])&&nx>=0&&ny>=0&&nx<N&&ny<N});
+      const d=opts[Math.random()*opts.length|0], nx=i+DX[d], ny=j+DY[d];
+      maze[j][i]|=BIT[d]; maze[ny][nx]|=BIT[(d+2)%4];
+    }
+  }
+  const open=[0,1,2,3].filter(d=>maze[0][0]&BIT[d]);
+  startDir=open[Math.random()*open.length|0];
+  reset(); 
+  msg.textContent='New maze. Press Play, then steer with Left and Right.';
+  document.getElementById('play').textContent='Play';
+  draw();
+}
+function reset(){x=.5;y=.5;dir=startDir;angle=0;target=-dir*Math.PI/2;snapX=snapY=0;state='idle'}
+
+function start(){
+  cancelAnimationFrame(raf);
+  reset();state='zoom';zoomT0=performance.now();
+  msg.textContent='Get ready…';
+  document.getElementById('play').textContent='Restart';
+  raf=requestAnimationFrame(loop);
+}
+
+function turn(s){
+  if(state!=='run')return;
+  const ox=x,oy=y;
+  x=Math.floor(x)+.5; y=Math.floor(y)+.5;   // snap to the cell center, turn instantly
+  snapX+=ox-x; snapY+=oy-y;
+  dir=(dir+s+4)%4; target-=s*Math.PI/2;
+}
+
+function loop(now){
+  if(state==='zoom'){
+    const p=Math.min((now-zoomT0)/1000,1), e=p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
+    viewZ=Math.exp(Math.log(N+.8)*(1-e)+Math.log(Z)*e);
+    viewX=N/2+(x-N/2)*e; viewY=N/2+(y-N/2)*e; angle=target*e;
+    if(p>=1){state='run';last=now;viewZ=Z;msg.textContent='Go! The runner always faces up. Left and Right rotate the maze.'}
+    draw();
+    raf=requestAnimationFrame(loop);return;
+  }
+  if(state!=='run')return;
+  const dt=Math.min((now-last)/1000,.05); last=now;
+  const horiz=dir%2===1, sign=(dir===1||dir===2)?1:-1;
+  const a=horiz?x:y, c=Math.floor(a);
+  let na=a+sign*SPEED*dt;
+  const cell=maze[Math.floor(y)][Math.floor(x)];
+  if(!(cell&BIT[dir])){
+    const lim=c+(sign>0?.8:.2);
+    if((sign>0&&na>=lim)||(sign<0&&na<=lim)){na=lim;state='crash';msg.textContent='Crashed into a wall. Press Restart or Generate.'}
+  }
+  if(horiz)x=na;else y=na;
+  if(state==='run'&&Math.floor(x)===N-1&&Math.floor(y)===N-1){state='win';msg.textContent='You escaped! Generate a new maze to go again.'}
+  const k=1-Math.exp(-dt*30);
+  angle+=(target-angle)*k; snapX*=1-k; snapY*=1-k;
+  draw();
+  if(state==='run')raf=requestAnimationFrame(loop);
+}
+
+function draw(){
+  const dpr=window.devicePixelRatio||1, w=cv.clientWidth;
+  if(cv.width!==Math.round(w*dpr)){cv.width=cv.height=Math.round(w*dpr)}
+  if(state==='idle'){viewZ=N+.8;viewX=viewY=N/2}
+  else if(state!=='zoom'){viewZ=Z;viewX=x+snapX;viewY=y+snapY}
+  const W=cv.width, s=W/viewZ, css=getComputedStyle(document.documentElement), g=k=>css.getPropertyValue(k).trim();
+  ctx.clearRect(0,0,W,W);
+  ctx.save();
+  ctx.translate(W/2,W/2);ctx.rotate(angle);ctx.scale(s,s);ctx.translate(-viewX,-viewY);
+  ctx.fillStyle=g('--exit');ctx.globalAlpha=.25;ctx.fillRect(N-1,N-1,1,1);ctx.globalAlpha=1;
+  ctx.font='bold .5px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.save();ctx.translate(N-.5,N-.5);ctx.rotate(-angle);ctx.fillText('★',0,0);ctx.restore();
+  ctx.strokeStyle=g('--wall');ctx.lineWidth=.09;ctx.lineCap='round';ctx.beginPath();
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){
+    const v=maze[j][i];
+    if(!(v&1)){ctx.moveTo(i,j);ctx.lineTo(i+1,j)}
+    if(!(v&8)){ctx.moveTo(i,j);ctx.lineTo(i,j+1)}
+    if(j===N-1&&!(v&4)){ctx.moveTo(i,j+1);ctx.lineTo(i+1,j+1)}
+    if(i===N-1&&!(v&2)){ctx.moveTo(i+1,j);ctx.lineTo(i+1,j+1)}
+  }
+  ctx.stroke();
+  // runner: points up on screen while playing, shows its heading on the full map
+  const live=state==='run'||state==='crash'||state==='win', r=.26;
+  ctx.save();ctx.translate(live?viewX:x,live?viewY:y);ctx.rotate(live?-angle:dir*Math.PI/2);
+  ctx.fillStyle=state==='crash'?'#d93025':g('--runner');
+  ctx.beginPath();ctx.moveTo(0,-r);ctx.lineTo(r*.85,r*.8);ctx.lineTo(0,r*.4);ctx.lineTo(-r*.85,r*.8);ctx.closePath();ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+const spd=document.getElementById('spd'), spdv=document.getElementById('spdv');
+spd.addEventListener('input',()=>{SPEED=+spd.value;spdv.textContent=SPEED.toFixed(1)+'x'});
+spd.addEventListener('change',()=>spd.blur()); // keep arrow keys for steering
+document.getElementById('gen').onclick=gen;
+document.getElementById('play').onclick=start;
+const L=document.getElementById('L'),R=document.getElementById('R');
+['pointerdown'].forEach(e=>{L.addEventListener(e,ev=>{ev.preventDefault();turn(-1)});R.addEventListener(e,ev=>{ev.preventDefault();turn(1)})});
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft'||e.key==='a')turn(-1);
+  else if(e.key==='ArrowRight'||e.key==='d')turn(1);
+  else if(e.key===' '&&state!=='run'){e.preventDefault();start()}
+});
+addEventListener('resize',draw);
+gen();
+</script>
+</body>
+</html>
