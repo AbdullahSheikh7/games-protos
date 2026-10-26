@@ -24,10 +24,18 @@ button:active{transform:scale(.97)}
 .speed{display:flex;align-items:center;gap:12px;width:min(100%,520px);font-weight:700}
 .speed input{flex:1;accent-color:var(--runner);height:32px}
 .speed output{min-width:3.2em;text-align:right}
+.link{background:none;color:var(--ink);text-decoration:underline;padding:2px 6px;flex:none;font-weight:600;font-size:.9rem}
+dialog{border:3px solid var(--wall);border-radius:14px;background:var(--panel);color:var(--ink);padding:20px 22px;width:min(92vw,420px);max-height:85vh;overflow:auto}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+dialog h2{margin:0 0 10px;font-size:1.2rem}
+dialog ol{margin:0 0 16px;padding-left:1.2em;line-height:1.5;font-size:.95rem}
+dialog li{margin-bottom:6px}
+dialog button{width:100%}
 </style>
 </head>
 <body>
 <h1>Maze Runner</h1>
+<button class="link" id="help">How to play</button>
 <div id="msg"></div>
 <div id="wrap"><canvas id="c"></canvas></div>
 <div class="row">
@@ -42,6 +50,19 @@ button:active{transform:scale(.97)}
   <button class="turn" id="L" aria-label="Turn left">⟲ Left</button>
   <button class="turn" id="R" aria-label="Turn right">Right ⟳</button>
 </div>
+<dialog id="dlg">
+  <h2>How to play</h2>
+  <ol>
+    <li><b>Goal:</b> guide the runner from the top-left to the green ★ exit in the bottom-right without hitting a wall.</li>
+    <li><b>Generate maze</b> makes a new random maze. <b>Play</b> zooms in and starts the run.</li>
+    <li>The runner moves forward on its own and always faces up on screen.</li>
+    <li><b>Left / Right</b> turn the runner from its own point of view. The maze rotates around it.</li>
+    <li>Turn at junctions. Driving into a wall, or turning into one, crashes the runner.</li>
+    <li>Use the <b>Speed</b> slider to go slower or faster at any time.</li>
+    <li><b>Keyboard:</b> ← / → or A / D to turn, Space to play.</li>
+  </ol>
+  <button id="ok">OK</button>
+</dialog>
 <script>
 const N=15; let SPEED=3.4;
 const DX=[0,1,0,-1], DY=[-1,0,1,0]; // N E S W
@@ -97,6 +118,7 @@ function turn(s){
 }
 
 function loop(now){
+  if(paused){ if(state==='zoom'&&pl)zoomT0+=now-pl; pl=now; last=now; raf=requestAnimationFrame(loop); return; }
   if(state==='zoom'){
     const p=Math.min((now-zoomT0)/1000,1), e=p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
     viewZ=Math.exp(Math.log(N+.8)*(1-e)+Math.log(Z)*e);
@@ -153,6 +175,12 @@ function draw(){
   ctx.restore();
 }
 
+const dlg=document.getElementById('dlg');
+let paused=false, pl=0;
+document.getElementById('help').onclick=()=>{paused=true;dlg.showModal()};
+document.getElementById('ok').onclick=()=>dlg.close();
+dlg.addEventListener('close',()=>{paused=false;pl=0});
+dlg.addEventListener('click',e=>{if(e.target===dlg)dlg.close()});
 const spd=document.getElementById('spd'), spdv=document.getElementById('spdv');
 spd.addEventListener('input',()=>{SPEED=+spd.value;spdv.textContent=SPEED.toFixed(1)+'x'});
 spd.addEventListener('change',()=>spd.blur()); // keep arrow keys for steering
@@ -161,6 +189,7 @@ document.getElementById('play').onclick=start;
 const L=document.getElementById('L'),R=document.getElementById('R');
 ['pointerdown'].forEach(e=>{L.addEventListener(e,ev=>{ev.preventDefault();turn(-1)});R.addEventListener(e,ev=>{ev.preventDefault();turn(1)})});
 addEventListener('keydown',e=>{
+  if(dlg.open)return;
   if(e.key==='ArrowLeft'||e.key==='a')turn(-1);
   else if(e.key==='ArrowRight'||e.key==='d')turn(1);
   else if(e.key===' '&&state!=='run'){e.preventDefault();start()}
